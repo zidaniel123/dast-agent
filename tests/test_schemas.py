@@ -98,9 +98,23 @@ class TestFeaturesTable:
         assert "| - |" in row
 
 
+def finding_rows(markdown: str) -> list[str]:
+    """Body rows of the findings table only (first cell is the numeric index).
+
+    The report now also has an executive-summary severity-count table, so filter
+    to rows whose first cell is a number to isolate the findings table.
+    """
+    rows = []
+    for row in data_rows(markdown):
+        first = row.split("|")[1].strip() if row.count("|") >= 2 else ""
+        if first.isdigit():
+            rows.append(row)
+    return rows
+
+
 class TestVulnReport:
     def test_empty_report_is_explicit(self):
-        assert vulns_to_markdown(WalkVulns(vulnerabilities=[])) == "No vulnerabilities found."
+        assert "No vulnerabilities found." in vulns_to_markdown(WalkVulns(vulnerabilities=[]))
 
     def _vuln(self, **overrides) -> WalkVulns:
         return WalkVulns(
@@ -119,14 +133,16 @@ class TestVulnReport:
             ]
         )
 
-    def test_pipe_in_observation_does_not_add_columns(self):
-        markdown = vulns_to_markdown(self._vuln(observation="a | b | c"))
-        row = data_rows(markdown)[0]
-        assert row.count("|") - row.count(r"\|") == 7  # index + 5 cells
+    def test_findings_table_row_has_five_columns(self):
+        row = finding_rows(vulns_to_markdown(self._vuln()))[0]
+        assert row.count("|") - row.count(r"\|") == 6  # index + 4 cells
+
+    def test_pipe_in_description_does_not_add_columns(self):
+        row = finding_rows(vulns_to_markdown(self._vuln(description="a | b | c")))[0]
+        assert row.count("|") - row.count(r"\|") == 6
 
     def test_multiline_description_stays_on_one_row(self):
-        markdown = vulns_to_markdown(self._vuln(description="line1\nline2"))
-        assert len(data_rows(markdown)) == 1
+        assert len(finding_rows(vulns_to_markdown(self._vuln(description="line1\nline2")))) == 1
 
     def test_evidence_is_rendered_in_fenced_blocks(self):
         markdown = vulns_to_markdown(
@@ -144,6 +160,48 @@ class TestVulnReport:
         assert "```http" in markdown
         assert "GET / HTTP/1.1" in markdown
 
+    def test_screenshot_is_embedded_as_an_image(self):
+        markdown = vulns_to_markdown(
+            self._vuln(
+                evidences=[
+                    WalkVulnEvidences(
+                        name="idor shot",
+                        description="d",
+                        http_request="GET /x HTTP/1.1",
+                        http_response="HTTP/1.1 200 OK",
+                        screenshot_path="finding-1-idor.png",
+                    )
+                ]
+            )
+        )
+        assert "![idor shot](finding-1-idor.png)" in markdown
+
+    def test_reproduction_and_remediation_render(self):
+        markdown = vulns_to_markdown(
+            self._vuln(
+                reproduction_steps=["Log in as user A", "Request /training/2", "See user B's notes"],
+                remediation="Enforce the owner check in the /training/{id} handler.",
+                remediation_references=["https://owasp.org/www-community/attacks/idor"],
+            )
+        )
+        assert "**Reproduction**" in markdown
+        assert "1. Log in as user A" in markdown
+        assert "**Remediation**" in markdown
+        assert "owner check" in markdown
+        assert "owasp.org" in markdown
+
+    def test_findings_are_severity_sorted(self):
+        vulns = WalkVulns(
+            vulnerabilities=[
+                WalkVuln(name="low one", description="d", cwe_id="CWE-1", observation="o",
+                         severity="Low", evidences=[]),
+                WalkVuln(name="crit one", description="d", cwe_id="CWE-2", observation="o",
+                         severity="Critical", evidences=[]),
+            ]
+        )
+        markdown = vulns_to_markdown(vulns)
+        assert markdown.index("crit one") < markdown.index("low one")
+
     @pytest.mark.parametrize("count", [1, 3])
     def test_findings_are_numbered_from_one(self, count):
         vulns = WalkVulns(
@@ -159,6 +217,6 @@ class TestVulnReport:
                 for i in range(count)
             ]
         )
-        rows = data_rows(vulns_to_markdown(vulns))
+        rows = finding_rows(vulns_to_markdown(vulns))
         assert rows[0].startswith("| 1 |")
         assert len(rows) == count

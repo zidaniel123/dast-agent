@@ -74,17 +74,23 @@ class Settings:
         )
 
 
-def playwright_args(allowed_origins: str | None = None) -> list[str]:
+def playwright_args(allowed_origins: str | None = None, output_dir: str | None = None) -> list[str]:
     """Assemble the Playwright MCP argv for this run.
 
     ``allowed_origins`` is the scope fence: the browser refuses navigation
     outside it, so a redirect or an injected link in the target application
     cannot walk the scan onto a third party's site. This is a real control, not
     a prompt instruction the model may ignore.
+
+    ``output_dir`` is where the browser writes files, including the screenshots
+    the pentest phase captures as evidence. Pointing it at the run's output
+    directory keeps each finding's screenshot next to the report that cites it.
     """
     args = list(BASE_PLAYWRIGHT_ARGS)
     if allowed_origins:
         args.append(f"--allowed-origins={allowed_origins}")
+    if output_dir:
+        args.append(f"--output-dir={output_dir}")
     # Both of the following weaken the browser and are therefore opt-in.
     # --no-sandbox disables the Chromium sandbox, which is the main thing
     # standing between a malicious page and the host.
@@ -99,7 +105,11 @@ def playwright_args(allowed_origins: str | None = None) -> list[str]:
     return args
 
 
-def build_browser(settings: Settings | None = None, allowed_origins: str | None = None):
+def build_browser(
+    settings: Settings | None = None,
+    allowed_origins: str | None = None,
+    output_dir: str | None = None,
+):
     """Build the Playwright MCP stdio server used by both phases.
 
     Imported lazily so that modules which only need ``Settings`` (or that run in
@@ -113,7 +123,7 @@ def build_browser(settings: Settings | None = None, allowed_origins: str | None 
         name="playwright",
         params={
             "command": "npx",
-            "args": playwright_args(allowed_origins),
+            "args": playwright_args(allowed_origins, output_dir),
         },
         client_session_timeout_seconds=timeout,
     )

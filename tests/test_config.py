@@ -73,6 +73,13 @@ class TestBrowserHardening:
     def test_no_fence_when_no_origin_given(self, clean_env):
         assert not any(a.startswith("--allowed-origins") for a in playwright_args())
 
+    def test_output_dir_is_passed_so_screenshots_land_with_the_report(self, clean_env):
+        args = playwright_args(output_dir="/runs/out")
+        assert "--output-dir=/runs/out" in args
+
+    def test_no_output_dir_flag_when_not_given(self, clean_env):
+        assert not any(a.startswith("--output-dir") for a in playwright_args())
+
     def test_proxy_is_opt_in(self, clean_env):
         clean_env.setenv("DAST_PROXY_SERVER", "http://127.0.0.1:8080")
         assert "--proxy-server=http://127.0.0.1:8080" in playwright_args()

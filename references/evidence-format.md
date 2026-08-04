@@ -14,6 +14,9 @@ Each vulnerability record contains:
 | `observation` | What was actually observed in this application. |
 | `cwe_id` | Strict `CWE-<NUM>` identifier (see below). |
 | `severity` | One of the severity enum values (see below). |
+| `reproduction_steps` | Ordered, concrete steps another tester can follow to reproduce the finding. |
+| `remediation` | The specific fix and the secure pattern to adopt — not a generic platitude. |
+| `remediation_references` | Authoritative fix URLs (CWE page, OWASP cheat sheet, framework docs). |
 | `evidences` | One or more evidence records (see below). |
 
 ## Evidence records
@@ -26,10 +29,16 @@ Each entry in `evidences` captures a single request/response pair:
 | `description` | What this request/response demonstrates. |
 | `http_request` | The raw HTTP request, including the `X-Pentest-Case` header. |
 | `http_response` | The raw HTTP response (status line, headers, relevant body). |
+| `screenshot_path` | Filename of the screenshot captured while the weakness was visible (saved into the output directory). Empty only when there is no rendered page to show. |
 
 Capture requests and responses verbatim. Every request shown as evidence must
 carry the `X-Pentest-Case` header whose value is the executed test case name, so
 the traffic is attributable and reproducible.
+
+Capture the screenshot with the Playwright `browser_take_screenshot` tool using a
+`filename` of the form `finding-<n>-<short-slug>.png`; the browser saves into the
+run's output directory, so record just the filename in `screenshot_path`. The
+report embeds it inline as an image next to the HTTP evidence.
 
 ### Example evidence
 

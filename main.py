@@ -168,6 +168,7 @@ async def pentest_app(
     auth_notes: str,
     scope: str,
     features_markdown: str,
+    output_dir: str | None = None,
 ) -> WalkVulns:
     from agents import Agent, Runner
 
@@ -175,7 +176,9 @@ async def pentest_app(
     model = build_model(settings)
     instructions = _compose_pentest_instructions(base_url, auth_notes, scope, features_markdown)
 
-    async with build_browser(settings, allowed_origins=_origin(base_url)) as browser:
+    async with build_browser(
+        settings, allowed_origins=_origin(base_url), output_dir=output_dir
+    ) as browser:
         agent = Agent(
             name="Pentest Agent",
             instructions=instructions,
@@ -239,6 +242,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         auth_notes,
         args.scope,
         features_markdown,
+        output_dir=str(output_dir),
     )
     report_markdown = vulns_to_markdown(vulns)
     report_path = output_dir / "pentest_results.md"
