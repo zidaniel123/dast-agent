@@ -42,7 +42,7 @@ def _parse(text: str) -> dict:
             ) from exc
         parsed = yaml.safe_load(text)
         if not isinstance(parsed, dict):
-            raise ValueError("OpenAPI spec did not parse to a mapping.")
+            raise ValueError("OpenAPI spec did not parse to a mapping.") from None
         return parsed
 
 

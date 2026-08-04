@@ -17,7 +17,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -29,7 +31,40 @@ from schemas import (
     features_to_markdown,
     vulns_to_markdown,
 )
-from skills import load_skill
+from skills import load_skill, reference_appendix, skill
+
+
+def _configure_logging() -> None:
+    """Install a log sink that cannot print local variables.
+
+    loguru's default sink runs with ``diagnose=True``, so any exception inside a
+    ``@logger.catch`` frame prints the values of locals in that frame — which
+    here includes ``Settings`` and therefore the gateway API key, plus whatever
+    test-account credentials were passed in auth notes.
+    """
+    logger.remove()
+    logger.add(sys.stderr, backtrace=False, diagnose=False)
+
+
+def _phase_instructions(name: str) -> str:
+    """Skill body plus the reference documents that phase cites."""
+    phase = skill(name)
+    return (
+        load_skill(phase.skill_path)
+        + "\n\n## Reference appendix\n\n"
+        + "The specifications cited above are inlined here and are authoritative.\n\n"
+        + reference_appendix(phase.references)
+    )
+
+
+def _origin(base_url: str) -> str:
+    """Scheme + host + port of the target, used as the browser's navigation fence."""
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise SystemExit(
+            f"--base-url must be an absolute http(s) URL, got {base_url!r}"
+        )
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 # --------------------------------------------------------------------------- #
@@ -41,7 +76,7 @@ def _compose_walk_instructions(
     scope: str,
     openapi_inventory: str | None,
 ) -> str:
-    body = load_skill("walk/SKILL.md")
+    body = _phase_instructions("walk")
     context = [
         "# Engagement context",
         f"Target application: {base_url}",
@@ -75,7 +110,7 @@ def _compose_pentest_instructions(
     scope: str,
     features_markdown: str,
 ) -> str:
-    body = load_skill("pentest/SKILL.md")
+    body = _phase_instructions("pentest")
     context = [
         "# Engagement context",
         f"Target application: {base_url}",
@@ -108,7 +143,7 @@ async def walk_app(
     model = build_model(settings)
     instructions = _compose_walk_instructions(base_url, auth_notes, scope, openapi_inventory)
 
-    async with build_browser(settings) as browser:
+    async with build_browser(settings, allowed_origins=_origin(base_url)) as browser:
         logger.info("Playwright MCP server started")
         agent = Agent(
             name="Walk Agent",
@@ -127,7 +162,7 @@ async def walk_app(
 
 
 @logger.catch(reraise=True)
-async def walk_and_pentest(
+async def pentest_app(
     settings: Settings,
     base_url: str,
     auth_notes: str,
@@ -140,7 +175,7 @@ async def walk_and_pentest(
     model = build_model(settings)
     instructions = _compose_pentest_instructions(base_url, auth_notes, scope, features_markdown)
 
-    async with build_browser(settings) as browser:
+    async with build_browser(settings, allowed_origins=_origin(base_url)) as browser:
         agent = Agent(
             name="Pentest Agent",
             instructions=instructions,
@@ -198,7 +233,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     logger.success(f"Features written to {features_path}")
 
     # Phase 2: pentest
-    vulns = await walk_and_pentest(
+    vulns = await pentest_app(
         settings,
         args.base_url,
         auth_notes,
@@ -260,6 +295,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    _configure_logging()
     args = _build_parser().parse_args()
     asyncio.run(run_pipeline(args))
 

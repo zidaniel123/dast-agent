@@ -7,8 +7,6 @@ models are the contract the agents must satisfy as their structured output.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 from pydantic import BaseModel
 
 
@@ -17,22 +15,22 @@ from pydantic import BaseModel
 # --------------------------------------------------------------------------- #
 class SecurityTestCase(BaseModel):
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     attack_vector: str
     cwe_id: str
-    approach: Optional[str] = None
-    expected_conditions: Optional[str] = None
+    approach: str | None = None
+    expected_conditions: str | None = None
 
 
 class WalkFeature(BaseModel):
     name: str
-    description: Optional[str] = None
-    feature_urls: List[str]
-    test_cases: List[SecurityTestCase]
+    description: str | None = None
+    feature_urls: list[str]
+    test_cases: list[SecurityTestCase]
 
 
 class WalkFeatures(BaseModel):
-    features: List[WalkFeature]
+    features: list[WalkFeature]
 
 
 # --------------------------------------------------------------------------- #
@@ -51,20 +49,39 @@ class WalkVuln(BaseModel):
     cwe_id: str
     observation: str
     severity: str
-    evidences: List[WalkVulnEvidences]
+    evidences: list[WalkVulnEvidences]
 
 
 class WalkVulns(BaseModel):
-    vulnerabilities: List[WalkVuln]
+    vulnerabilities: list[WalkVuln]
 
 
 # --------------------------------------------------------------------------- #
 # Renderers
 # --------------------------------------------------------------------------- #
+def _cell(value: str | None, fallback: str = "-") -> str:
+    """Make model-authored text safe to drop into a Markdown table cell.
+
+    A raw ``|`` splits the row into extra columns and a newline ends the row
+    early, so a single unescaped character silently corrupts the rest of the
+    table. Findings routinely contain both (payloads, SQL, stack traces).
+    """
+    text = (value or "").strip()
+    if not text:
+        return fallback
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\n", "<br>")
+        .replace("\r", " ")
+    )
+
+
 def features_to_markdown(walk_features: WalkFeatures) -> str:
     """Render ``WalkFeatures`` as a Markdown document."""
 
-    lines: List[str] = []
+    lines: list[str] = []
 
     for feature in walk_features.features:
         lines.append(f"## {feature.name}")
@@ -83,14 +100,19 @@ def features_to_markdown(walk_features: WalkFeatures) -> str:
                 "|-----------|---------------|--------|-------------|----------|---------------------|"
             )
             for tc in feature.test_cases:
-                name = tc.name or "-"
-                attack_vector = tc.attack_vector or "-"
-                cwe_id = tc.cwe_id or "-"
-                description = tc.description or "-"
-                approach = tc.approach or "-"
-                expected = tc.expected_conditions or "-"
                 lines.append(
-                    f"| {name} | {attack_vector} | {cwe_id} | {description} | {approach} | {expected} |"
+                    "| "
+                    + " | ".join(
+                        (
+                            _cell(tc.name),
+                            _cell(tc.attack_vector),
+                            _cell(tc.cwe_id),
+                            _cell(tc.description),
+                            _cell(tc.approach),
+                            _cell(tc.expected_conditions),
+                        )
+                    )
+                    + " |"
                 )
 
         lines.append("\n---\n")
@@ -101,7 +123,7 @@ def features_to_markdown(walk_features: WalkFeatures) -> str:
 def vulns_to_markdown(walk_vulns: WalkVulns) -> str:
     """Render ``WalkVulns`` as a Markdown vulnerability report."""
 
-    lines: List[str] = []
+    lines: list[str] = []
 
     if not walk_vulns.vulnerabilities:
         return "No vulnerabilities found."
@@ -111,12 +133,19 @@ def vulns_to_markdown(walk_vulns: WalkVulns) -> str:
     lines.append("|---|---------------|----------|--------|-------------|-------------|")
 
     for idx, vuln in enumerate(walk_vulns.vulnerabilities, 1):
-        name = vuln.name or "-"
-        severity = vuln.severity or "-"
-        cwe_id = vuln.cwe_id or "-"
-        description = (vuln.description or "-").replace("\n", " ")
-        observation = (vuln.observation or "-").replace("\n", " ")
-        lines.append(f"| {idx} | {name} | {severity} | {cwe_id} | {description} | {observation} |")
+        lines.append(
+            f"| {idx} | "
+            + " | ".join(
+                (
+                    _cell(vuln.name),
+                    _cell(vuln.severity),
+                    _cell(vuln.cwe_id),
+                    _cell(vuln.description),
+                    _cell(vuln.observation),
+                )
+            )
+            + " |"
+        )
 
     lines.append("\n---\n")
     lines.append("## Evidence Details\n")

@@ -7,3 +7,8 @@ pentest_results.md
 .venv/
 venv/
 .DS_Store
+.pytest_cache/
+.ruff_cache/
+
+# Engagement notes may contain real test-account credentials
+auth-notes*.txt
