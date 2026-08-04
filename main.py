@@ -247,7 +247,12 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     report_markdown = vulns_to_markdown(vulns)
     report_path = output_dir / "pentest_results.md"
     report_path.write_text(report_markdown, encoding="utf-8")
-    logger.success(f"Vulnerability report written to {report_path}")
+    # JSON sidecar: the machine-readable form of the same findings, so other
+    # tools (e.g. an orchestrator that files tickets) consume structured data
+    # instead of parsing Markdown.
+    json_path = output_dir / "pentest_results.json"
+    json_path.write_text(vulns.model_dump_json(indent=2), encoding="utf-8")
+    logger.success(f"Vulnerability report written to {report_path} and {json_path}")
 
 
 def _resolve_auth_notes(args: argparse.Namespace) -> str:
