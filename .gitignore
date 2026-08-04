@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+outputs/
+features.md
+pentest_results.md
+.venv/
+venv/
+.DS_Store

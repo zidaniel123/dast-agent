@@ -1,0 +1,7 @@
+openai-agents
+openai
+pydantic
+python-dotenv
+loguru
+httpx
+pyyaml
