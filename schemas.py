@@ -59,11 +59,19 @@ class WalkVuln(BaseModel):
     remediation: str = ""
     # Authoritative fix references (CWE page, OWASP cheat sheet, framework docs).
     remediation_references: list[str] = []
+    # IDs of deterministic-baseline alerts (baseline.json) this finding
+    # confirms. Empty for findings discovered purely by the agent. Additive and
+    # optional: reports from before the baseline phase existed stay valid.
+    baseline_alert_ids: list[str] = []
     evidences: list[WalkVulnEvidences]
 
 
 class WalkVulns(BaseModel):
     vulnerabilities: list[WalkVuln]
+    # Baseline alert IDs the agent tested and refuted. Recorded (not silently
+    # dropped) so the report distinguishes "scanner false positive" from
+    # "scanner alert nobody looked at".
+    refuted_baseline_alert_ids: list[str] = []
 
 
 # --------------------------------------------------------------------------- #
@@ -178,6 +186,15 @@ def vulns_to_markdown(walk_vulns: WalkVulns) -> str:
             )
             + " |"
         )
+
+    if walk_vulns.refuted_baseline_alert_ids:
+        lines.extend(["", "## Scanner baseline", ""])
+        lines.append(
+            "Refuted deterministic-baseline alerts (tested by the pentest phase, "
+            "not confirmed): "
+            + ", ".join(f"`{i}`" for i in walk_vulns.refuted_baseline_alert_ids)
+        )
+
     lines.extend(["", "---", "", "## Findings", ""])
 
     for idx, vuln in enumerate(vulns, 1):
@@ -185,6 +202,11 @@ def vulns_to_markdown(walk_vulns: WalkVulns) -> str:
         lines.append("")
         lines.append(f"- **Severity:** {(vuln.severity or 'unknown').strip().lower()}")
         lines.append(f"- **CWE:** {vuln.cwe_id or 'n/a'}")
+        if vuln.baseline_alert_ids:
+            lines.append(
+                "- **Scanner baseline:** confirms deterministic alert(s) "
+                + ", ".join(f"`{i}`" for i in vuln.baseline_alert_ids)
+            )
         lines.append("")
         if vuln.description:
             lines.extend([vuln.description, ""])

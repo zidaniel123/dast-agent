@@ -1,12 +1,16 @@
 """DAST agent entry point.
 
-Orchestrates a two-phase authenticated dynamic scan:
+Orchestrates a deterministic baseline plus a two-phase authenticated scan:
 
-    walk   -> log in with the test account, enumerate in-scope features, and
-              emit WSTG-style security test cases (structured WalkFeatures).
-    pentest -> execute the in-scope test cases against the running app, tag every
-              request with the X-Pentest-Case header, and emit a structured
-              vulnerability report with HTTP request/response evidence.
+    baseline -> run whichever deterministic scanners are available (nuclei,
+                OWASP ZAP baseline) and normalize their alerts. Degradable:
+                missing scanners are skipped with a warning, never fatal.
+    walk     -> log in with the test account, enumerate in-scope features, and
+                emit WSTG-style security test cases (structured WalkFeatures).
+    pentest  -> confirm-or-refute the baseline alerts with real evidence, then
+                execute the in-scope test cases against the running app, tag
+                every request with the X-Pentest-Case header, and emit a
+                structured vulnerability report with HTTP evidence.
 
 Behavioral instructions come from skills/<phase>/SKILL.md; runtime context
 (target, scope, credentials, OpenAPI inventory) is composed on top at run time.
@@ -23,6 +27,7 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from baseline_scan import alerts_to_markdown, baseline_disabled_by_env, run_baseline
 from config import Settings, build_browser, build_model
 from openapi import build_endpoint_inventory
 from schemas import (
@@ -109,6 +114,7 @@ def _compose_pentest_instructions(
     auth_notes: str,
     scope: str,
     features_markdown: str,
+    baseline_markdown: str,
 ) -> str:
     body = _phase_instructions("pentest")
     context = [
@@ -119,6 +125,9 @@ def _compose_pentest_instructions(
         "",
         "## Authentication notes",
         auth_notes or "(none provided)",
+        "",
+        "## Deterministic scanner baseline (nuclei/ZAP)",
+        baseline_markdown,
         "",
         "## Features and security test cases (from the walk phase)",
         features_markdown,
@@ -168,13 +177,16 @@ async def pentest_app(
     auth_notes: str,
     scope: str,
     features_markdown: str,
+    baseline_markdown: str,
     output_dir: str | None = None,
 ) -> WalkVulns:
     from agents import Agent, Runner
 
     logger.info(f"Pentest phase starting: {base_url} (scope: {scope})")
     model = build_model(settings)
-    instructions = _compose_pentest_instructions(base_url, auth_notes, scope, features_markdown)
+    instructions = _compose_pentest_instructions(
+        base_url, auth_notes, scope, features_markdown, baseline_markdown
+    )
 
     async with build_browser(
         settings, allowed_origins=_origin(base_url), output_dir=output_dir
@@ -222,6 +234,17 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Phase 0: deterministic scanner baseline. Runs in the Python orchestration
+    # layer (never as an agent tool), so missing scanners degrade to a warning
+    # instead of becoming something the model has to reason around.
+    baseline = run_baseline(
+        args.base_url,
+        expected_origin=_origin(args.base_url),
+        output_dir=output_dir,
+        disabled=args.no_baseline or baseline_disabled_by_env(),
+    )
+    baseline_markdown = alerts_to_markdown(baseline)
+
     # Phase 1: walk
     features = await walk_app(
         settings,
@@ -242,6 +265,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         auth_notes,
         args.scope,
         features_markdown,
+        baseline_markdown,
         output_dir=str(output_dir),
     )
     report_markdown = vulns_to_markdown(vulns)
@@ -299,6 +323,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         help="Override the model id (otherwise DAST_MODEL / the built-in default).",
+    )
+    parser.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="Skip the deterministic scanner baseline (nuclei/ZAP). "
+        "Same effect as DAST_NO_BASELINE=1.",
     )
     return parser
 

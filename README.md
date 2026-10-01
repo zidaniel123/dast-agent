@@ -29,13 +29,17 @@ flowchart TD
 
     A --> E["openapi.py<br/>ingest spec → endpoint inventory<br/>(optional, --openapi)"]
 
+    B --> N["<b>Phase 0 — BASELINE</b><br/>baseline_scan.py<br/>nuclei + ZAP baseline<br/>(degradable: missing scanners warn, never fail)"]
+    N -->|"normalized alerts<br/>outputs/baseline.json"| I
+    N -.->|"skipped / disabled:<br/>the prompt says so explicitly"| I
+
     D --> F["<b>Phase 1 — WALK</b><br/>skills/walk/SKILL.md<br/>+ authorization-and-scope + web-test-cases<br/>+ engagement context + inventory"]
     E --> F
     F -->|"browser: navigate · fill · click"| G["WalkFeatures (Pydantic)<br/>features + WSTG test cases"]
     G --> H["features_to_markdown()<br/>outputs/features.md"]
 
-    H --> I["<b>Phase 2 — PENTEST</b><br/>skills/pentest/SKILL.md<br/>+ authorization-and-scope + evidence-format<br/>+ the walk's feature list"]
-    I -->|"in-scope cases only<br/>every request tagged X-Pentest-Case"| J["WalkVulns (Pydantic)<br/>findings + HTTP evidence"]
+    H --> I["<b>Phase 2 — PENTEST</b><br/>skills/pentest/SKILL.md<br/>+ authorization-and-scope + evidence-format<br/>+ baseline alerts + the walk's feature list"]
+    I -->|"confirm-or-refute baseline alerts,<br/>then in-scope cases only<br/>every request tagged X-Pentest-Case"| J["WalkVulns (Pydantic)<br/>findings + HTTP evidence"]
 
     J --> K["vulns_to_markdown()<br/>cells escaped for pipes/newlines"]
     K --> L["<b>End</b><br/>outputs/pentest_results.md"]
@@ -46,6 +50,29 @@ flowchart TD
 The two phases share one browser definition and one model handle, both built in
 [`config.py`](config.py). Each phase's Pydantic output type is the contract — the
 agent cannot finish without producing a conforming object.
+
+### Phase 0 — the deterministic baseline
+
+Before any LLM phase runs, [`baseline_scan.py`](baseline_scan.py) runs whatever
+deterministic scanners are on the host — **nuclei** (local binary, else the
+`projectdiscovery/nuclei` Docker image) and the **OWASP ZAP baseline**
+(`zaproxy/zap-stable` running `zap-baseline.py`) — against the same origin the
+browser is fenced to. Their output is normalized into alert objects
+(id, scanner, severity, URL, CWE, evidence) and written to the output directory.
+
+The baseline is **degradable by design**: each scanner that cannot run is
+skipped with a warning, and the pipeline continues LLM-only exactly as before.
+The pentest prompt is told which case it is in — alerts to work through,
+scanners ran but found nothing, or baseline skipped — so the agent never has to
+guess whether it has deterministic leads. Opt out entirely with `--no-baseline`
+or `DAST_NO_BASELINE=1`.
+
+The pentest agent's duty for each baseline alert is **confirm or refute with
+real evidence**: confirmed alerts become normal findings linked back to the
+alert id (`baseline_alert_ids`); refuted alerts are recorded in
+`refuted_baseline_alert_ids`, never silently dropped. After that it hunts on
+its own — the scanners are unauthenticated and see nothing behind login, so
+the test-case-driven work is unchanged.
 
 ---
 
@@ -150,6 +177,10 @@ rewords those between runs, and they do not change what the finding *is*.
 - A Chromium build for Playwright: `npx playwright install chromium`
 - An **LLM gateway / API key** exposed over the OpenAI-compatible API
 - A **test account** on the target application, and ideally its OpenAPI spec
+- **Optional, for the Phase 0 baseline:** a `nuclei` binary on your `PATH`
+  and/or **Docker** (used for the `projectdiscovery/nuclei` and
+  `zaproxy/zap-stable` images). Neither is required — missing scanners degrade
+  to a skipped baseline with a warning.
 
 ## Install
 
@@ -184,6 +215,16 @@ Browser hardening flags are **opt-in**, because each one weakens the browser:
 | `DAST_IGNORE_HTTPS_ERRORS=1` | Accepts invalid certificates | Convenient on staging, but the scan then cannot detect TLS misconfiguration and is open to interception. |
 | `DAST_PROXY_SERVER=http://127.0.0.1:8080` | Routes traffic through a proxy | For capturing real traffic in ZAP or Burp. |
 
+Phase 0 baseline tuning (all optional):
+
+| Variable | Effect | Default |
+| --- | --- | --- |
+| `DAST_NO_BASELINE=1` | Skips the scanner baseline entirely (same as `--no-baseline`) | off |
+| `NUCLEI_SEVERITY` | Severity floor passed to nuclei | `critical,high,medium` |
+| `NUCLEI_TIMEOUT` | Seconds before the nuclei run is abandoned | `900` |
+| `ZAP_TIMEOUT` | Seconds before the ZAP baseline is abandoned | `1800` |
+| `NUCLEI_IMAGE` / `ZAP_IMAGE` | Docker images used when a local scanner is absent | `projectdiscovery/nuclei:latest` / `zaproxy/zap-stable:latest` |
+
 ## Usage
 
 ```bash
@@ -202,6 +243,7 @@ uv run python main.py \
 | `--scope` | Feature scope to test (default `auth,registration`). |
 | `--output-dir` | Where reports are written (default `outputs/`). |
 | `--model` | Override the model id for this run. |
+| `--no-baseline` | Skip the Phase 0 scanner baseline (same as `DAST_NO_BASELINE=1`). |
 
 **Use `--auth-notes-file` for anything containing real credentials.** Command
 line arguments are visible to every process on the host via `ps` and land in
@@ -275,7 +317,16 @@ CI pins every GitHub Action to a commit SHA rather than a moving tag.
 Two Markdown files in the output directory (default `outputs/`):
 
 - **`features.md`** — enumerated features and their security test cases.
-- **`pentest_results.md`** — the vulnerability report with evidence.
+- **`pentest_results.md`** — the vulnerability report with evidence
+  (plus `pentest_results.json`, the same findings as structured data).
+
+And, when the baseline phase ran, three scanner artifacts:
+
+- **`nuclei.json`** — nuclei's JSON-lines output, verbatim.
+- **`zap-baseline.json`** — zap-baseline.py's report, verbatim.
+- **`baseline.json`** — both normalized into one alert list, with a record of
+  which scanners ran and why any were skipped. The `alert_id` values here are
+  what `baseline_alert_ids` / `refuted_baseline_alert_ids` in the report cite.
 
 Table cells are escaped: a `|` or newline inside a finding (common — payloads,
 SQL, raw HTTP) would otherwise corrupt every remaining row of the report.
@@ -353,21 +404,30 @@ and [`SECURITY.md`](SECURITY.md) before your first run.
 uv run pytest
 ```
 
-41 tests, no network and no API key required — settings resolution, browser
+72 tests, no network and no API key required — settings resolution, browser
 hardening flags, the origin fence, skill/reference loading and path-escape
-guards, and Markdown cell escaping.
+guards, Markdown cell escaping, and the Phase 0 baseline: nuclei/ZAP output
+parsing, alert normalization, scanner degradation and opt-out paths, and the
+baseline origin fence (all scanner invocation is mocked; nothing needs nuclei,
+ZAP, or Docker installed).
 
 ---
 
 ## Limitations
 
-- Findings are LLM-driven and require **human validation**.
+- Findings are LLM-driven and require **human validation**. The Phase 0
+  baseline supplies deterministic leads (nuclei/ZAP alerts), but the
+  confirm-or-refute judgement and the evidence transcription are still the
+  model's.
 - **Evidence is transcribed by the model, not captured.** `http_request` and
   `http_response` are strings the agent writes; nothing verifies they match
   traffic that was actually sent. Routing the browser through an intercepting
   proxy (`DAST_PROXY_SERVER`) and citing proxy history instead would make
   evidence machine-checkable. That is the single most valuable change this repo
   could make, and it has not been made yet.
+- The baseline scanners are **unauthenticated**: they see the login page, not
+  what is behind it. A clean `baseline.json` says nothing about the
+  authenticated surface.
 - No deduplication (see above).
 - Default scope is authentication and registration; broader scopes work but the
   bundled catalogue is deepest there.
